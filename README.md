@@ -144,6 +144,10 @@ MODEL_NAME=model/KITE-7B-Instruct OUT_ROOT=outputs/kite-full-baseline-v2 \
   uv run bash scripts/run_parallel_eval.sh
 ```
 
+If the GPUs are shared with another job, `scripts/queue_full_reproduction.sh`
+waits without killing existing processes, then runs baseline and LoRA end to
+end and verifies that all 47 `stats_data.json` files were produced.
+
 The launcher defaults to `OVD_BACKEND=stub` and disables TATC so it can run
 with only the downloaded VLM weights (the measured split-0 runs use these
 settings).  For the full perception stack, provide the GroundingDINO weights
