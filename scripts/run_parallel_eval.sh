@@ -14,6 +14,7 @@ MAX_NEW_TOKENS="${MAX_NEW_TOKENS:-64}"
 OVD_BACKEND="${OVD_BACKEND:-stub}"
 ROBOT_PROFILE="${ROBOT_PROFILE:-examples/robot_profiles/sim_single_arm.json}"
 HF_ENDPOINT_VALUE="${HF_ENDPOINT:-https://hf-mirror.com}"
+SKIP_EXISTING="${SKIP_EXISTING:-1}"
 
 IFS=',' read -r -a GPUS_ARR <<< "${GPUS_CSV}"
 NUM_WORKERS="${#GPUS_ARR[@]}"
@@ -83,6 +84,10 @@ run_worker() {
     local name
     name="$(basename "${test_file%.json}")"
     local out_dir="${OUT_ROOT}/${split_dir}/${name}"
+    if [[ "${SKIP_EXISTING}" == "1" && -f "${out_dir}/stats_data.json" ]]; then
+      echo "[gpu=${gpu}] skip completed ${test_file}" | tee -a "${worker_log}"
+      continue
+    fi
     echo "[gpu=${gpu}] ${test_file} -> ${out_dir}" | tee -a "${worker_log}"
     CUDA_VISIBLE_DEVICES="${gpu}" HF_ENDPOINT="${HF_ENDPOINT_VALUE}" KITE_KEYFRAME_STRATEGY="${KITE_KEYFRAME_STRATEGY:-uniform}" \
       uv run python -m kite.cli \
