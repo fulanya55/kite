@@ -60,7 +60,7 @@ If you already cloned without `--recursive`, run: `git submodule update --init`
    build used for the reproduction):
 ```bash
 uv venv --python 3.12
-uv sync --extra download
+uv sync --extra download --extra serve
 source .venv/bin/activate
 ```
 
