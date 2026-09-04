@@ -48,7 +48,9 @@ class Keyframe:
         cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
         ok, fr = cap.read(); cap.release()
         if not ok:
-            raise RuntimeError(f"Cannot read frame {self.frame_idx} from {self.video_path}")
+            fr = _read_frame_pyav(self.video_path, self.frame_idx)
+            if fr is None:
+                raise RuntimeError(f"Cannot read frame {self.frame_idx} from {self.video_path}")
         self.image = fr
         return fr
 
@@ -182,7 +184,17 @@ class KeyframeSelector:
         return sorted({int(i) for i in np.linspace(0, count-1, k)})
 
     def select(self, video_path: str) -> List[Keyframe]:
-        mags, idxs = compute_flow_magnitude_sequence(video_path, stride=self.stride)
+        if self.strategy == 'uniform':
+            # Avoid an O(number-of-frames) optical-flow pass for fast,
+            # reproducible benchmark sweeps.  The motion strategy below is
+            # unchanged and remains the default paper setting.
+            cap = cv2.VideoCapture(video_path)
+            count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            cap.release()
+            idxs = np.asarray(self._uniform_indices(count), dtype=np.int64)
+            mags = np.zeros((len(idxs),), dtype=np.float32)
+        else:
+            mags, idxs = compute_flow_magnitude_sequence(video_path, stride=self.stride)
         if len(idxs)==0:
             return []
         fps = get_fps(video_path) or 30.0
@@ -241,8 +253,25 @@ def extract_frame_at_time(video_path: str, t: float):
     cap.set(cv2.CAP_PROP_POS_FRAMES, int(max(0, t*fps)))
     ok, fr = cap.read(); cap.release()
     if not ok:
+        fr = _read_frame_pyav(video_path, int(max(0, t*fps)))
+        if fr is not None:
+            return fr
         return np.zeros((512,512,3), dtype=np.uint8)
     return fr
+
+
+def _read_frame_pyav(video_path: str, frame_idx: int) -> Optional[np.ndarray]:
+    """Decode a frame with PyAV when OpenCV cannot handle AV1 streams."""
+    try:
+        import av  # type: ignore
+        with av.open(video_path) as container:
+            stream = container.streams.video[0]
+            for idx, frame in enumerate(container.decode(stream)):
+                if idx >= frame_idx:
+                    return frame.to_ndarray(format='bgr24')
+    except Exception:
+        return None
+    return None
 
 def montage_1xN(frames: List[np.ndarray], labels: List[str]=None) -> np.ndarray:
     if labels is None:

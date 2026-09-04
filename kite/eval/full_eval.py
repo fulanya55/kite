@@ -50,6 +50,46 @@ from ..utils.logger import Timer
 
 def _ensure_dir(p): os.makedirs(p, exist_ok=True)
 
+_VIDEO_INDEX = {}
+
+def _resolve_video_path(dataset_folder: str, relative: str) -> str:
+    """Resolve RoboFAC paths across the archive's historical layouts.
+
+    The official annotations use ``dataset_success_cleaned``/
+    ``dataset_failure_cleaned`` and bare real-world task names, while the
+    ModelScope snapshot stores these under ``simulation_data/{success,failure}_data``
+    and ``realworld_data`` respectively.
+    """
+    root = os.path.abspath(dataset_folder)
+    rel = str(relative).replace('\\', '/').lstrip('/')
+    candidates = [os.path.join(root, rel), os.path.join(root, 'simulation_data', rel), os.path.join(root, 'realworld_data', rel)]
+    if rel.startswith('dataset_success_cleaned/'):
+        tail = rel.split('/', 1)[1]
+        candidates.append(os.path.join(root, 'simulation_data', 'success_data', tail))
+    if rel.startswith('dataset_failure_cleaned/'):
+        tail = rel.split('/', 1)[1]
+        candidates.append(os.path.join(root, 'simulation_data', 'failure_data', tail))
+    # Real-world annotations omit the realworld_data prefix.
+    if rel.startswith('so100_'):
+        candidates.append(os.path.join(root, 'realworld_data', rel))
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+    # A subset of old RoboFAC annotation files has stale task/view prefixes,
+    # but UUID filenames remain stable.  Resolve those by basename once.
+    key = os.path.abspath(dataset_folder)
+    if key not in _VIDEO_INDEX:
+        index = {}
+        for dirpath, _, filenames in os.walk(key):
+            for name in filenames:
+                if name.lower().endswith(('.mp4', '.avi', '.mov')):
+                    index.setdefault(name, os.path.join(dirpath, name))
+        _VIDEO_INDEX[key] = index
+    fallback = _VIDEO_INDEX[key].get(os.path.basename(rel))
+    if fallback:
+        return fallback
+    return candidates[0]
+
 def _clean_q(q: str) -> str:
     # strip and remove image tokens
     return (q or '').replace('<image>', '').strip()
@@ -180,16 +220,25 @@ def _chrf(a: str, b: str) -> Optional[float]:
 
 # SBERT cosine similarity (scaled to [0,1]); lazy-load model on CPU
 _SBERT_MODEL = None
+_SBERT_DISABLED = False
 
 def _get_sbert_model():
-    global _SBERT_MODEL
+    global _SBERT_MODEL, _SBERT_DISABLED
+    if _SBERT_DISABLED:
+        return None
     if _SentenceTransformer is None:
         return None
     if _SBERT_MODEL is None:
         name = os.environ.get('SBERT_MODEL', 'sentence-transformers/all-MiniLM-L6-v2')
         try:
             _SBERT_MODEL = _SentenceTransformer(name, device='cpu')
-        except Exception:
+        except Exception as exc:
+            # Do not retry a failed Hub download for every QA item.  Optional
+            # SBERT metrics remain null and the other deterministic metrics
+            # are still computed.
+            _SBERT_DISABLED = True
+            if os.environ.get("KITE_VERBOSE_METRICS"):
+                print(f"[SBERT] disabled: {exc}")
             return None
     return _SBERT_MODEL
 
@@ -271,7 +320,7 @@ def evaluate_split(
     htatc_dump_rows: List[Dict[str,Any]] = []
 
     for video_id, video_dict in tqdm(annos_per_video.items(), desc="videos", unit="vid"):
-        vpath = os.path.join(dataset_folder, video_dict['video'])
+        vpath = _resolve_video_path(dataset_folder, video_dict['video'])
         task_name = video_dict.get('task', 'unknown')
         annos = video_dict['annos']
 
@@ -279,11 +328,24 @@ def evaluate_split(
             import cv2
             cap = cv2.VideoCapture(vpath); fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             nframes = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0); ret, frame0 = cap.read(); cap.release()
+            if not ret:
+                # OpenCV builds without AV1 support can still be handled by
+                # the PyAV fallback used by keyframe image loading.
+                frame0 = extract_frame_at_time(vpath, 0.0)
+                ret = frame0 is not None and frame0.size > 0
             H,W = (frame0.shape[0], frame0.shape[1]) if ret else (512,512)
 
         # Unified keyframe selection (replaces event/evidence distinction)
         with Timer(f"keyframes:{video_id}"):
-            selector = KeyframeSelector(strategy='motion', max_keyframes=5, stride=2)
+            # Motion selection is the paper setting.  ``KITE_KEYFRAME_STRATEGY=uniform``
+            # provides a deterministic, much faster full-dataset pass when
+            # reproducing scores on CPU-only machines; max frames/stride are
+            # likewise configurable without changing the annotation protocol.
+            selector = KeyframeSelector(
+                strategy=os.environ.get('KITE_KEYFRAME_STRATEGY', 'motion'),
+                max_keyframes=int(os.environ.get('KITE_MAX_KEYFRAMES', '5')),
+                stride=int(os.environ.get('KITE_KEYFRAME_STRIDE', '2')),
+            )
             keyframes = selector.select(vpath)
         if not keyframes:
             # fallback: center frame

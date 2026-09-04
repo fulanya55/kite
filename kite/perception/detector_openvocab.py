@@ -16,7 +16,7 @@ class OpenVocabDetector:
         """Unified open-vocabulary detector wrapper.
 
         Parameters:
-            backend: one of {"auto","owlvit","groundingdino","yolo"}
+            backend: one of {"auto","owlvit","groundingdino","yolo","stub"}
             yolo_weights: path or model name for YOLO (ultralytics)
             owlvit_model: HF model id for OwlViT
             device: torch device string
@@ -41,6 +41,11 @@ class OpenVocabDetector:
         self._owl_model = None
         self._yolo = None
         self._dino = None
+
+        # Explicit stub mode is useful for deterministic smoke tests and for
+        # running the VLM-only benchmark without downloading detector weights.
+        if self.backend == "stub":
+            return
 
         errors: Dict[str, str] = {}
 
@@ -116,6 +121,8 @@ class OpenVocabDetector:
             if self._yolo is None:
                 raise RuntimeError("YOLO backend not initialized.")
             return self._detect_yolo(frame)
+        if self.backend == "stub":
+            return []
         raise RuntimeError(f"Unsupported backend '{self.backend}'.")
 
     def _detect_owlvit(self, frame, queries: List[str]):

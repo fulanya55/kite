@@ -6,6 +6,50 @@ build-backend = "setuptools.build_meta"
 name = "kite"
 version = "0.1.0"
 description = "Research code for KITE"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "accelerate>=0.30.0",
+  "bitsandbytes>=0.43.0",
+  "datasets>=2.19.0",
+  "faiss-cpu",
+  "gradio>=4.0.0",
+  "httpx",
+  "matplotlib",
+  "numpy<2.3",
+  "open-clip-torch",
+  "opencv-python",
+  "peft>=0.11.0",
+  "pillow",
+  "plotly",
+  "qwen-vl-utils>=0.0.14",
+  "rouge-score>=0.1.2",
+  "sacrebleu>=2.4.0",
+  "sentence-transformers",
+  "torch==2.7.1",
+  "tqdm",
+  "transformers>=4.49.0,<5.0.0",
+  "ultralytics>=8.0.0",
+  "wandb",
+  "av>=12.0.0",
+]
+
+[project.optional-dependencies]
+download = ["modelscope>=1.18.0", "huggingface-hub>=0.27.0"]
+serve = ["vllm>=0.6.0"]
+train = ["trl>=0.15.0"]
+
+[project.scripts]
+kite = "kite.cli:main"
+kite-train-lora = "training.train_lora:main"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [tool.setuptools]
 package-dir = {"" = "."}

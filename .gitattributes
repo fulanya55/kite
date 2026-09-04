@@ -1,0 +1,21 @@
+# Keep repository text files stable across clone/scp and Windows/Linux hosts.
+* text=auto eol=lf
+
+# Large/binary assets must never be newline-normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.avi binary
+*.mov binary
+*.zip binary
+*.safetensors binary
+*.pth binary
+*.pt binary
+*.onnx binary
+*.h5 binary
+*.npy binary
+*.npz binary
+*.pdf binary

@@ -105,6 +105,7 @@ wandb/
 checkpoints/
 runs/
 models/
+model/
 lora_out/
 figures/
 plots/
