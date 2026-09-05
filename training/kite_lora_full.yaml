@@ -48,5 +48,9 @@ logging_steps: 10
 save_total_limit: 2
 dataloader_num_workers: 0
 decode_workers: 16
+# Coarse locality only: keep a few videos hot for the decoder, but interleave
+# their QA rows so one video cannot fill an entire batch.
+videos_per_window: 8
+max_samples_per_video_per_batch: 4
 seed: 42
 trust_remote_code: false

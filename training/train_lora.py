@@ -312,6 +312,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--save-total-limit", type=int)
     p.add_argument("--dataloader-num-workers", type=int)
     p.add_argument("--decode-workers", type=int)
+    p.add_argument("--videos-per-window", type=int)
+    p.add_argument("--max-samples-per-video-per-batch", type=int)
     p.add_argument("--fps", type=float)
     p.add_argument("--num-frames", type=int)
     p.add_argument("--max-pixels", type=int, help="Video processor spatial pixel budget (512x512 is 262144)")
@@ -348,6 +350,8 @@ def _merge_config(args: argparse.Namespace) -> argparse.Namespace:
         "save_total_limit": 2,
         "dataloader_num_workers": 0,
         "decode_workers": 16,
+        "videos_per_window": 8,
+        "max_samples_per_video_per_batch": 4,
         "fps": 1.0,
         "num_frames": 8,
         "max_pixels": 262144,
@@ -482,18 +486,26 @@ def _auto_batch_size(model: torch.nn.Module, dataset: VideoQADataset, collator: 
 
 
 class VideoGroupedBatchSampler(torch.utils.data.Sampler[List[int]]):
-    """Shuffle video groups while keeping all QA rows for a video together.
+    """Use coarse video windows without collapsing a video's QA distribution.
 
-    Each dataset row is one QA sample, but many rows point to the same MP4.
-    Grouping prevents the Trainer's random sampler from scattering those rows
-    across the epoch and repeatedly reopening the same file.  Groups larger
-    than a micro-batch are split, which is the only case where a decode must be
-    repeated.
+    A window contains a small shuffled set of videos (eight by default).  Rows
+    are interleaved round-robin and capped per video in each batch, so a video
+    cannot monopolize a batch.  The window keeps only a few videos hot in the
+    decoder cache, while the window and row order remain randomized.
     """
 
-    def __init__(self, dataset: VideoQADataset, batch_size: int, seed: int = 42):
+    def __init__(
+        self,
+        dataset: VideoQADataset,
+        batch_size: int,
+        seed: int = 42,
+        videos_per_window: int = 8,
+        max_samples_per_video_per_batch: int = 4,
+    ):
         self.batch_size = max(1, int(batch_size))
         self.seed = int(seed)
+        self.videos_per_window = max(1, int(videos_per_window))
+        self.max_samples_per_video_per_batch = max(1, int(max_samples_per_video_per_batch))
         self.epoch = 0
         groups: Dict[str, List[int]] = {}
         for index, row in enumerate(dataset.records):
@@ -505,19 +517,30 @@ class VideoGroupedBatchSampler(torch.utils.data.Sampler[List[int]]):
         groups = [list(indices) for indices in self.groups]
         rng.shuffle(groups)
         batches: List[List[int]] = []
-        current: List[int] = []
-        for indices in groups:
-            rng.shuffle(indices)
-            while indices:
-                room = self.batch_size - len(current)
-                take = indices[:room]
-                del indices[:room]
-                current.extend(take)
-                if len(current) == self.batch_size:
-                    batches.append(current)
-                    current = []
-        if current:
-            batches.append(current)
+        for start in range(0, len(groups), self.videos_per_window):
+            window = [list(indices) for indices in groups[start : start + self.videos_per_window]]
+            for indices in window:
+                rng.shuffle(indices)
+            # Keep drawing from several active videos.  A video contributes at
+            # most max_samples_per_video_per_batch rows before the next one is
+            # selected, preserving QA diversity inside each batch.
+            while any(window):
+                active = [indices for indices in window if indices]
+                rng.shuffle(active)
+                batch: List[int] = []
+                for indices in active:
+                    if len(batch) >= self.batch_size:
+                        break
+                    take = min(
+                        self.max_samples_per_video_per_batch,
+                        self.batch_size - len(batch),
+                        len(indices),
+                    )
+                    batch.extend(indices[:take])
+                    del indices[:take]
+                if batch:
+                    rng.shuffle(batch)
+                    batches.append(batch)
         self.epoch += 1
         yield from batches
 
@@ -619,7 +642,13 @@ def main() -> None:
         dataloader_persistent_workers=args.dataloader_num_workers > 0,
         seed=args.seed,
     )
-    batch_sampler = VideoGroupedBatchSampler(dataset, batch_size, seed=args.seed)
+    batch_sampler = VideoGroupedBatchSampler(
+        dataset,
+        batch_size,
+        seed=args.seed,
+        videos_per_window=args.videos_per_window,
+        max_samples_per_video_per_batch=args.max_samples_per_video_per_batch,
+    )
     trainer = VideoGroupedTrainer(
         model=model,
         args=train_args,
