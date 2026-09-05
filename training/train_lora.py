@@ -78,7 +78,10 @@ def _load_records(path: Path, data_root: Path, max_samples: int | None) -> List[
 
 _FRAME_CACHE: "OrderedDict[tuple[str, int, int], Any]" = OrderedDict()
 _FRAME_CACHE_LOCK = Lock()
-_FRAME_CACHE_LIMIT = 16
+# Keep enough entries for a complete micro-batch.  The grouped sampler emits
+# split chunks of an oversized video consecutively, so this cache lets the
+# second chunk reuse the decoded frames without reopening the MP4.
+_FRAME_CACHE_LIMIT = 64
 
 
 def _decode_sampled_frames(path: str, num_frames: int, image_size: int) -> Any:
@@ -515,7 +518,6 @@ class VideoGroupedBatchSampler(torch.utils.data.Sampler[List[int]]):
                     current = []
         if current:
             batches.append(current)
-        rng.shuffle(batches)
         self.epoch += 1
         yield from batches
 
