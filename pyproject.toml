@@ -21,6 +21,7 @@ dependencies = [
   "peft>=0.11.0",
   "pillow",
   "plotly",
+  "pyyaml>=6.0",
   "qwen-vl-utils>=0.0.14",
   "rouge-score>=0.1.2",
   "sacrebleu>=2.4.0",
@@ -53,4 +54,3 @@ torchvision = { index = "pytorch-cu128" }
 
 [tool.setuptools]
 package-dir = {"" = "."}
-
